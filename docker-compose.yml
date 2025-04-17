@@ -1,0 +1,108 @@
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    command: ["mongod", "--bind_ip_all", "--noauth"]
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh mongodb:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: cmd/api-gateway/Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      user-service:
+        condition: service_started
+      message-service:
+        condition: service_started
+    environment:
+      - PORT=8080
+      - USER_SERVICE_URL=http://whatsapp-user-service:8081
+      - MESSAGE_SERVICE_URL=http://message-service:8082
+      - JWT_SECRET=your-secret-key-here
+      - JWT_EXPIRATION_HOURS=24
+
+  user-service:
+    build:
+      context: .
+      dockerfile: cmd/user-service/Dockerfile
+    container_name: whatsapp-user-service
+    ports:
+      - "8081:8081"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - PORT=8081
+      - MONGODB_URI=mongodb://mongodb:27017/whatsapp
+      - MONGODB_DATABASE=whatsapp
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - JWT_SECRET=your-secret-key-here
+    restart: on-failure
+
+  message-service:
+    build:
+      context: .
+      dockerfile: cmd/message-service/Dockerfile
+    container_name: message-service
+    ports:
+      - "8082:8082"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - PORT=8082
+      - MONGODB_URI=mongodb://mongodb:27017/whatsapp
+      - MONGODB_DATABASE=whatsapp
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - JWT_SECRET=your-secret-key-here
+    restart: on-failure
+
+  frontend:
+    build:
+      context: .
+      dockerfile: web/whatsapp/Dockerfile
+    container_name: whatsapp-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api-gateway
+    environment:
+      - API_URL=/api
+
+volumes:
+  mongodb_data:
+  rabbitmq_data:

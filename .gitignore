@@ -1,0 +1,93 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+bin/
+
+# Go specific
+*.o
+*.a
+*.orig
+
+# Environment variables and secrets
+.env
+*.env
+*.pem
+*.key
+secrets/
+
+# macOS specific files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows specific files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.vs/
+*.sublime-workspace
+*.sublime-project
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Dependency directories
+vendor/
+node_modules/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# MongoDB data directory
+data/db/
+
+# Build output
+dist/
+
+# Temporary files
+tmp/
+temp/
+
+# Docker volumes
+volumes/
+
+# Compiled Object files, Static and Dynamic libs
+*.o
+*.a
+
+# Debug files
+debug
+
+# Air live reload
+.air.toml
+tmp/
+
+# Swagger generated files
+swagger.json
+swagger.yaml
+docs/docs.go
+docs/swagger.json
+docs/swagger.yaml
+
+# Generated certificate files
+*.pem
+*.crt
+*.key
