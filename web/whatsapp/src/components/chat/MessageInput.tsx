@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState } from 'react';
 
 interface MessageInputProps {
   onSendMessage: (content: string, mediaUrl?: string) => void;
@@ -23,12 +23,13 @@ export const MessageInput = ({
   return (
     <form
       onSubmit={handleSubmit}
-      className="p-4 border-t bg-white flex items-center gap-2"
+      className="p-3 border-t bg-white flex items-center gap-2"
     >
+      {/* Ataç */}
       <button
         type="button"
-        className="p-2 rounded-full hover:bg-gray-100"
-        title="Attach files"
+        className="p-2 rounded-full hover:bg-gray-100 disabled:opacity-40"
+        title="Attach file"
         disabled={disabled || isUploading}
       >
         <svg
@@ -47,19 +48,22 @@ export const MessageInput = ({
         </svg>
       </button>
 
+      {/* Input */}
       <input
         type="text"
         value={message}
         onChange={(e) => setMessage(e.target.value)}
         placeholder="Type a message"
-        className="flex-1 p-2 border rounded-full focus:outline-none focus:ring-2 focus:ring-blue-300"
+        className="flex-1 bg-gray-100 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
         disabled={disabled || isUploading}
       />
 
+      {/* Gönder Butonu */}
       <button
         type="submit"
-        className="p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 disabled:opacity-50 disabled:hover:bg-blue-500"
+        className="p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 disabled:opacity-50"
         disabled={!message.trim() || disabled || isUploading}
+        title="Send"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
