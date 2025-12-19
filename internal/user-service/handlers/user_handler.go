@@ -95,6 +95,13 @@ func (h *UserHandler) Register(c *gin.Context) {
         return
     }
 
+    // Generate JWT token for immediate login
+    token, expiration, err := h.authService.GenerateToken(newUser.ID.Hex(), newUser.Username)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+        return
+    }
+
     userResponse := models.UserResponse{
         ID:        newUser.ID.Hex(),
         Username:  newUser.Username,
@@ -105,7 +112,11 @@ func (h *UserHandler) Register(c *gin.Context) {
         Status:    newUser.Status,
     }
 
-    c.JSON(http.StatusCreated, userResponse)
+    c.JSON(http.StatusCreated, models.LoginResponse{
+        Token:     token,
+        ExpiresAt: expiration.Format(time.RFC3339),
+        User:      userResponse,
+    })
 }
 
 // Login godoc
@@ -437,148 +448,185 @@ func (h *UserHandler) UpdateStatus(c *gin.Context) {
 // @Failure      401  {object}  models.ErrorResponse
 // @Failure      500  {object}  models.ErrorResponse
 // @Router       /users/contacts [get]
+// GetUserContacts proxies a request to get contacts (users with chat history)
 func (h *UserHandler) GetUserContacts(c *gin.Context) {
-    // Get the user ID from the authentication token
-    UserID, exists := c.Get("UserID")
-    if !exists {
-        c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-        return
-    }
+	// Get the user ID from the authentication token
+	UserID, exists := c.Get("UserID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
 
-    objectID, err := primitive.ObjectIDFromHex(UserID.(string))
-    if err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID format"})
-        return
-    }
+	objectID, err := primitive.ObjectIDFromHex(UserID.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID format"})
+		return
+	}
 
-    // Set to collect unique contact IDs
-    contactIDsMap := make(map[primitive.ObjectID]bool)
-    
-    // 1. Get contacts from message history
-    messagesCollection := h.usersCollection.Database().Collection("messages")
-    pipeline := []bson.M{
-        {
-            "$match": bson.M{
-                "$or": []bson.M{
-                    {"sender_id": objectID},
-                    {"receiver_id": objectID},
-                },
-            },
-        },
-        {
-            "$project": bson.M{
-                "contact_id": bson.M{
-                    "$cond": bson.M{
-                        "if":   bson.M{"$eq": []interface{}{"$sender_id", objectID}},
-                        "then": "$receiver_id",
-                        "else": "$sender_id",
-                    },
-                },
-            },
-        },
-        {
-            "$group": bson.M{
-                "_id": "$contact_id",
-            },
-        },
-    }
+	// Map to store contact details including last message
+	type ContactInfo struct {
+		ID              primitive.ObjectID
+		LastMessage     string
+		LastMessageTime time.Time
+	}
+	contactMap := make(map[primitive.ObjectID]ContactInfo)
 
-    cursor, err := messagesCollection.Aggregate(context.Background(), pipeline)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve contacts from messages"})
-        return
-    }
-    defer cursor.Close(context.Background())
+	// 1. Get contacts from message history with last message
+	messagesCollection := h.usersCollection.Database().Collection("messages")
+	
+	// Complex aggregation to get the last message for each conversation
+	pipeline := []bson.M{
+		{
+			"$match": bson.M{
+				"$or": []bson.M{
+					{"sender_id": objectID},
+					{"receiver_id": objectID},
+				},
+			},
+		},
+		{
+			"$sort": bson.M{"created_at": 1}, // Sort by time ascending first
+		},
+		{
+			"$project": bson.M{
+				"sender_id":   1,
+				"receiver_id": 1,
+				"content":     1,
+				"created_at":  1,
+				"contact_id": bson.M{
+					"$cond": bson.M{
+						"if":   bson.M{"$eq": []interface{}{"$sender_id", objectID}},
+						"then": "$receiver_id",
+						"else": "$sender_id",
+					},
+				},
+			},
+		},
+		{
+			"$group": bson.M{
+				"_id": "$contact_id",
+				"last_message": bson.M{"$last": "$content"},
+				"last_message_time": bson.M{"$last": "$created_at"},
+			},
+		},
+	}
 
-    var results []struct {
-        ID primitive.ObjectID `bson:"_id"`
-    }
-    
-    if err := cursor.All(context.Background(), &results); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse contact results"})
-        return
-    }
+	cursor, err := messagesCollection.Aggregate(context.Background(), pipeline)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve contacts from messages"})
+		return
+	}
+	defer cursor.Close(context.Background())
 
-    // Add message contacts to the map
-    for _, result := range results {
-        contactIDsMap[result.ID] = true
-    }
+	var results []struct {
+		ID              primitive.ObjectID `bson:"_id"`
+		LastMessage     string             `bson:"last_message"`
+		LastMessageTime time.Time          `bson:"last_message_time"`
+	}
 
-    // 2. Get explicitly added contacts
-    contactsCollection := h.usersCollection.Database().Collection("contacts")
-    contactsCursor, err := contactsCollection.Find(
-        context.Background(),
-        bson.M{"UserID": objectID},
-    )
-    
-    if err != nil && err != mongo.ErrNoDocuments {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve added contacts"})
-        return
-    }
+	if err := cursor.All(context.Background(), &results); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse contact results"})
+		return
+	}
 
-    if err != mongo.ErrNoDocuments {
-        defer contactsCursor.Close(context.Background())
+	// Add message contacts to the map
+	for _, result := range results {
+		contactMap[result.ID] = ContactInfo{
+			ID:              result.ID,
+			LastMessage:     result.LastMessage,
+			LastMessageTime: result.LastMessageTime,
+		}
+	}
 
-        var explicitContacts []struct {
-            ContactID primitive.ObjectID `bson:"contact_id"`
-        }
+	// 2. Get explicitly added contacts
+	contactsCollection := h.usersCollection.Database().Collection("contacts")
+	contactsCursor, err := contactsCollection.Find(
+		context.Background(),
+		bson.M{"UserID": objectID},
+	)
 
-        if err := contactsCursor.All(context.Background(), &explicitContacts); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse contacts data"})
-            return
-        }
+	if err != nil && err != mongo.ErrNoDocuments {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve added contacts"})
+		return
+	}
 
-        // Add explicit contacts to the map
-        for _, contact := range explicitContacts {
-            contactIDsMap[contact.ContactID] = true
-        }
-    }
+	if err != mongo.ErrNoDocuments {
+		defer contactsCursor.Close(context.Background())
 
-    // If no contacts found in either source, return empty array
-    if len(contactIDsMap) == 0 {
-        c.JSON(http.StatusOK, []models.UserResponse{})
-        return
-    }
+		var explicitContacts []struct {
+			ContactID primitive.ObjectID `bson:"contact_id"`
+		}
 
-    // Convert map keys to array of contact IDs
-    var contactIDs []primitive.ObjectID
-    for id := range contactIDsMap {
-        contactIDs = append(contactIDs, id)
-    }
+		if err := contactsCursor.All(context.Background(), &explicitContacts); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse contacts data"})
+			return
+		}
 
-    // Query the users collection to get contact details
-    userCursor, err := h.usersCollection.Find(
-        context.Background(),
-        bson.M{"_id": bson.M{"$in": contactIDs}},
-    )
-    
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch contact details"})
-        return
-    }
-    defer userCursor.Close(context.Background())
+		// Add explicit contacts to the map if not already there
+		for _, contact := range explicitContacts {
+			if _, exists := contactMap[contact.ContactID]; !exists {
+				contactMap[contact.ContactID] = ContactInfo{
+					ID: contact.ContactID,
+				}
+			}
+		}
+	}
 
-    // Convert users to response format
-    var users []models.User
-    if err := userCursor.All(context.Background(), &users); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse user results"})
-        return
-    }
+	// If no contacts found in either source, return empty array
+	if len(contactMap) == 0 {
+		c.JSON(http.StatusOK, []models.UserResponse{})
+		return
+	}
 
-    var userResponses []models.UserResponse
-    for _, user := range users {
-        userResponses = append(userResponses, models.UserResponse{
-            ID:        user.ID.Hex(),
-            Username:  user.Username,
-            Email:     user.Email,
-            FullName:  user.FullName,
-            AvatarURL: user.AvatarURL,
-            CreatedAt: user.CreatedAt.Format(time.RFC3339),
-            Status:    user.Status,
-        })
-    }
+	// Convert map keys to array of contact IDs
+	var contactIDs []primitive.ObjectID
+	for id := range contactMap {
+		contactIDs = append(contactIDs, id)
+	}
 
-    c.JSON(http.StatusOK, userResponses)
+	// Query the users collection to get contact details
+	userCursor, err := h.usersCollection.Find(
+		context.Background(),
+		bson.M{"_id": bson.M{"$in": contactIDs}},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch contact details"})
+		return
+	}
+	defer userCursor.Close(context.Background())
+
+	// Convert users to response format
+	var users []models.User
+	if err := userCursor.All(context.Background(), &users); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse user results"})
+		return
+	}
+
+	var userResponses []models.UserResponse
+	for _, user := range users {
+		response := models.UserResponse{
+			ID:        user.ID.Hex(),
+			Username:  user.Username,
+			Email:     user.Email,
+			FullName:  user.FullName,
+			AvatarURL: user.AvatarURL,
+			CreatedAt: user.CreatedAt.Format(time.RFC3339),
+			Status:    user.Status,
+		}
+		
+		// Enrich with last message info if available
+		if info, ok := contactMap[user.ID]; ok {
+			response.LastMessage = info.LastMessage
+			if !info.LastMessageTime.IsZero() {
+				response.LastMessageTime = info.LastMessageTime.Format(time.RFC3339)
+			}
+		}
+		
+		userResponses = append(userResponses, response)
+	}
+
+	c.JSON(http.StatusOK, userResponses)
 }
 
 // AddContact godoc

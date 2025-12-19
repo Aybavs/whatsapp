@@ -16,7 +16,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // WebSocketHandler handles websocket connections
@@ -26,7 +25,7 @@ type WebSocketHandler struct {
     clients          map[string]*websocket.Conn
     clientsMutex     sync.RWMutex
     rabbitMQClient   *rabbitmq.Client
-    authService      *auth.Service  // Auth service eklendi
+    authService      *auth.Service
 }
 
 // NewWebSocketHandler creates a new WebSocketHandler
@@ -36,12 +35,11 @@ func NewWebSocketHandler(messageServiceURL string, rabbitMQClient *rabbitmq.Clie
         clients:          make(map[string]*websocket.Conn),
         clientsMutex:     sync.RWMutex{},
         rabbitMQClient:   rabbitMQClient,
-        authService:      authService,  // Auth service yapılandırması
+        authService:      authService,
         upgrader: websocket.Upgrader{
             ReadBufferSize:  1024,
             WriteBufferSize: 1024,
             CheckOrigin: func(r *http.Request) bool {
-                // Geliştirme ortamında tüm origin'lere izin ver
                 return true
             },
         },
@@ -64,15 +62,24 @@ func NewWebSocketHandler(messageServiceURL string, rabbitMQClient *rabbitmq.Clie
         if err = rabbitMQClient.BindQueue(queue.Name, "message.#", "messages"); err != nil {
             log.Printf("Failed to bind queue: %v", err)
         }
-        
+
         if err = rabbitMQClient.BindQueue(queue.Name, "status.#", "messages"); err != nil {
             log.Printf("Failed to bind queue: %v", err)
         }
+
+        // Bind typing events
+        if err = rabbitMQClient.BindQueue(queue.Name, "typing.#", "messages"); err != nil {
+            log.Printf("Failed to bind typing queue: %v", err)
+        }
+
+        log.Printf("WebSocket Handler: RabbitMQ Consumer Setup Complete")
         
         // Start consuming messages
         if err = rabbitMQClient.Consume(queue.Name, handler.handleIncomingRabbitMQMessage); err != nil {
             log.Printf("Failed to start consuming messages: %v", err)
         }
+    } else {
+        log.Printf("CRITICAL: WebSocketHandler initialized with NIL RabbitMQ client. Real-time messaging will NOT work.")
     }
     
     return handler
@@ -80,28 +87,24 @@ func NewWebSocketHandler(messageServiceURL string, rabbitMQClient *rabbitmq.Clie
 
 // HandleWebSocket handles websocket connections
 func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
-    // Token parametresinden kullanıcıyı doğrula
     token := c.Query("token")
     if token == "" {
         c.JSON(http.StatusUnauthorized, gin.H{"error": "Token required"})
         return
     }
-    
-    // Token'ı doğrula ve kullanıcı ID'sini al
+
     claims, err := h.authService.ValidateToken(token)
     if err != nil {
         c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token: " + err.Error()})
         return
     }
-    
-    // Kullanıcı ID'sini gin context'e ekle
+
     UserID := claims.UserID
     c.Set("UserID", UserID)
     UserIDStr := UserID
-    
+
     log.Printf("WebSocket connection attempt from user: %s", UserIDStr)
-    
-    // Mevcut bağlantıyı kontrol et ve kapat
+
     h.clientsMutex.Lock()
     existingConn, exists := h.clients[UserIDStr]
     if exists {
@@ -110,8 +113,7 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
         delete(h.clients, UserIDStr)
     }
     h.clientsMutex.Unlock()
-    
-    // Geriye kalan WebSocket işlemleri...
+
     conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
     if err != nil {
         log.Printf("Failed to upgrade connection: %v", err)
@@ -119,8 +121,7 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
     }
 
     log.Printf("WebSocket connection established for user: %s", UserIDStr)
-    
-    // Bağlantı kurulduktan sonra, ping-pong yapılandırması
+
     conn.SetPingHandler(func(pingData string) error {
         log.Printf("Received ping from user %s", UserIDStr)
         return conn.WriteControl(websocket.PongMessage, []byte{}, time.Now().Add(10*time.Second))
@@ -134,8 +135,7 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
     h.clientsMutex.Lock()
     h.clients[UserIDStr] = conn
     h.clientsMutex.Unlock()
-    
-    // Publish online status via RabbitMQ
+
     if h.rabbitMQClient != nil {
         statusUpdate := models.StatusUpdate{Status: "online"}
         routingKey := fmt.Sprintf("status.user.%s", UserIDStr)
@@ -143,11 +143,9 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
             log.Printf("Failed to publish online status: %v", err)
         }
     }
-    
-    // Ping-pong mekanizması için ticker oluştur (30 saniyede bir ping gönder)
+
     pingTicker := time.NewTicker(30 * time.Second)
-    
-    // Bağlantı kapandığında temizleme işlemi
+
     defer func() {
         pingTicker.Stop()
         conn.Close()
@@ -156,8 +154,7 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
         h.clientsMutex.Unlock()
         
         log.Printf("WebSocket connection closed for user: %s", UserIDStr)
-        
-        // Publish offline status via RabbitMQ
+
         if h.rabbitMQClient != nil {
             statusUpdate := models.StatusUpdate{Status: "offline"}
             routingKey := fmt.Sprintf("status.user.%s", UserIDStr)
@@ -166,11 +163,9 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
             }
         }
     }()
-    
-    // Ping-pong için ayrı bir goroutine başlat
+
     go func() {
         for range pingTicker.C {
-            // Ping gönder
             if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
                 log.Printf("Error sending ping to user %s: %v", UserIDStr, err)
                 return
@@ -179,7 +174,6 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
         }
     }()
 
-    // WebSocket mesajlarını işleme
     for {
         messageType, p, err := conn.ReadMessage()
         if err != nil {
@@ -187,7 +181,6 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
             break
         }
         
-        // Ping-Pong mesajlarını yönet
         if messageType == websocket.TextMessage && string(p) == "ping" {
             if err := conn.WriteMessage(websocket.TextMessage, []byte("pong")); err != nil {
                 log.Printf("Error sending pong to user %s: %v", UserIDStr, err)
@@ -197,93 +190,160 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
         }
 
         if messageType == websocket.TextMessage {
+            var baseMsg map[string]interface{}
+            if err := json.Unmarshal(p, &baseMsg); err != nil {
+                log.Printf("Error unmarshalling message: %v", err)
+                continue
+            }
+
+            if msgType, ok := baseMsg["type"].(string); ok && msgType == "typing" {
+                var typingEvent models.TypingEvent
+                if err := json.Unmarshal(p, &typingEvent); err != nil {
+                    log.Printf("Error unmarshalling typing event: %v", err)
+                    continue
+                }
+
+                typingEvent.SenderID = UserIDStr
+                typingEvent.Timestamp = time.Now().Format(time.RFC3339)
+
+                if h.rabbitMQClient != nil {
+                    routingKey := fmt.Sprintf("typing.%s", typingEvent.ReceiverID)
+                    if err := h.rabbitMQClient.PublishToExchange("messages", routingKey, typingEvent); err != nil {
+                        log.Printf("Failed to publish typing event: %v", err)
+                    }
+                } else {
+                    h.sendTypingEventDirect(typingEvent)
+                }
+                continue
+            }
+
             var msg models.MessageRequest
             if err := json.Unmarshal(p, &msg); err != nil {
                 log.Printf("Error unmarshalling message: %v", err)
                 continue
             }
 
-            senderObjectID, err := primitive.ObjectIDFromHex(UserIDStr)
-            if err != nil {
-                log.Printf("Invalid sender ID: %v", err)
-                continue
+            authHeader := c.Request.Header.Get("Authorization")
+            if authHeader == "" {
+                authHeader = "Bearer " + token
             }
-
-            receiverObjectID, err := primitive.ObjectIDFromHex(msg.ReceiverID)
-            if err != nil {
-                log.Printf("Invalid receiver ID: %v", err)
-                continue
-            }
-
-            message := models.Message{
-                SenderID:   senderObjectID,
-                ReceiverID: receiverObjectID,
-                Content:    msg.Content,
-                MediaURL:   msg.MediaURL,
-            }
-
-            // Send message through RabbitMQ instead of direct HTTP if available
-            if h.rabbitMQClient != nil {
-                routingKey := fmt.Sprintf("message.%s", msg.ReceiverID)
-                if err := h.rabbitMQClient.PublishToExchange("messages", routingKey, message); err != nil {
-                    log.Printf("Failed to publish message to RabbitMQ: %v", err)
-                    
-                    // Fallback to HTTP if RabbitMQ fails
-                    h.sendMessageViaHTTP(message)
-                }
-            } else {
-                // Use HTTP if RabbitMQ client is not available
-                h.sendMessageViaHTTP(message)
-            }
+            
+            h.sendMessageViaHTTP(msg, authHeader)
         }
     }
 }
 
-// sendMessageViaHTTP sends a message using HTTP to the message service
-func (h *WebSocketHandler) sendMessageViaHTTP(message models.Message) {
-    reqBody, err := json.Marshal(message)
+// sendTypingEventDirect sends typing event directly to WebSocket client
+func (h *WebSocketHandler) sendTypingEventDirect(event models.TypingEvent) {
+    h.clientsMutex.RLock()
+    defer h.clientsMutex.RUnlock()
+
+    if conn, ok := h.clients[event.ReceiverID]; ok {
+        if err := conn.WriteJSON(event); err != nil {
+            log.Printf("Error sending typing event to WebSocket: %v", err)
+        }
+    }
+}
+
+// sendMessageViaHTTP sends a message payload using HTTP to the message service
+func (h *WebSocketHandler) sendMessageViaHTTP(payload interface{}, authHeader string) {
+    reqBody, err := json.Marshal(payload)
     if err != nil {
-        log.Printf("Error marshalling message: %v", err)
+        log.Printf("Error marshalling message payload: %v", err)
         return
     }
 
-    resp, err := http.Post(h.messageServiceURL+"/messages", "application/json", bytes.NewBuffer(reqBody))
+    req, err := http.NewRequest("POST", h.messageServiceURL+"/messages", bytes.NewBuffer(reqBody))
+    if err != nil {
+        log.Printf("Error creating request: %v", err)
+        return
+    }
+
+    req.Header.Set("Content-Type", "application/json")
+    if authHeader != "" {
+        req.Header.Set("Authorization", authHeader)
+    }
+
+    client := &http.Client{Timeout: 5 * time.Second}
+    resp, err := client.Do(req)
     if err != nil {
         log.Printf("Error sending message to message service: %v", err)
         return
     }
     defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+        body, _ := io.ReadAll(resp.Body)
+        log.Printf("Message service returned error: %d - %s", resp.StatusCode, string(body))
+    }
 }
 
 // handleIncomingRabbitMQMessage processes messages from RabbitMQ and forwards them to WebSocket clients
 func (h *WebSocketHandler) handleIncomingRabbitMQMessage(body []byte) error {
     var msg map[string]interface{}
     if err := json.Unmarshal(body, &msg); err != nil {
+        log.Printf("Error unmarshalling RabbitMQ message: %v", err)
         return err
     }
-    
-    // Determine message type and extract recipient ID
-    if receiverID, ok := msg["receiver_id"].(string); ok {
-        // This is a regular message
-        h.clientsMutex.RLock()
-        if conn, ok := h.clients[receiverID]; ok {
-            if err := conn.WriteJSON(msg); err != nil {
-                log.Printf("Error sending message to WebSocket: %v", err)
+
+    if msgType, ok := msg["type"].(string); ok && msgType == "typing" {
+        if receiverID, ok := msg["receiver_id"].(string); ok {
+            h.clientsMutex.RLock()
+            if conn, ok := h.clients[receiverID]; ok {
+                if err := conn.WriteJSON(msg); err != nil {
+                    log.Printf("Error sending typing event to WebSocket: %v", err)
+                }
             }
+            h.clientsMutex.RUnlock()
         }
-        h.clientsMutex.RUnlock()
-    } else if messageID, ok := msg["message_id"].(string); ok {
-        // This is a message status update
-        // Extract sender ID from message ID - would need a DB lookup in reality
-        // For now, we just log it
-        log.Printf("Status update for message %s: %v", messageID, msg["status"])
-    } else if statusUpdate, ok := msg["status"].(string); ok {
-        // This might be a user status update
-        if UserID, ok := msg["UserID"].(string); ok {
-            log.Printf("User %s status changed to %s", UserID, statusUpdate)
-        }
+        return nil
     }
-    
+
+    if msgType, ok := msg["type"].(string); ok && msgType == "batch" {
+        if senderID, ok := msg["sender_id"].(string); ok {
+            h.clientsMutex.RLock()
+            if conn, ok := h.clients[senderID]; ok {
+                if err := conn.WriteJSON(msg); err != nil {
+                    log.Printf("Error sending batch update to WebSocket: %v", err)
+                }
+            }
+            h.clientsMutex.RUnlock()
+        }
+        return nil
+    }
+
+    if _, ok := msg["content"].(string); ok {
+        if receiverID, ok := msg["receiver_id"].(string); ok {
+            h.clientsMutex.RLock()
+            if conn, ok := h.clients[receiverID]; ok {
+                if err := conn.WriteJSON(msg); err != nil {
+                    log.Printf("Error sending message to WebSocket: %v", err)
+                }
+            }
+            h.clientsMutex.RUnlock()
+        }
+        return nil
+    }
+
+    if _, ok := msg["message_id"].(string); ok {
+        if senderID, ok := msg["sender_id"].(string); ok {
+            h.clientsMutex.RLock()
+            if conn, ok := h.clients[senderID]; ok {
+                if err := conn.WriteJSON(msg); err != nil {
+                    log.Printf("Error sending status update to WebSocket: %v", err)
+                }
+            }
+            h.clientsMutex.RUnlock()
+        }
+        return nil
+    }
+
+    if _, ok := msg["status"].(string); ok {
+         if _, ok := msg["UserID"].(string); ok {
+         }
+         return nil
+    }
+
     return nil
 }
 

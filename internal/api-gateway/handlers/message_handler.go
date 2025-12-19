@@ -37,6 +37,11 @@ func (h *MessageHandler) UpdateMessageStatus(c *gin.Context) {
     h.proxyRequest(c, "/messages/"+messageID+"/status", http.MethodPatch)
 }
 
+// SearchMessages forwards search requests to the message service
+func (h *MessageHandler) SearchMessages(c *gin.Context) {
+    h.proxyRequest(c, "/messages/search?"+c.Request.URL.RawQuery, http.MethodGet)
+}
+
 // proxyRequest forwards the request to the message service
 func (h *MessageHandler) proxyRequest(c *gin.Context, path string, method string) {
     var requestBody []byte

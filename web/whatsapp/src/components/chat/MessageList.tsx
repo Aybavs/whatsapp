@@ -1,5 +1,5 @@
 import { AlertCircle, Loader2, SendIcon } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 
 import { useAuth } from '@/hooks/useAuth';
 import { Message } from '@/types';
@@ -12,33 +12,42 @@ interface MessageListProps {
   error: string | null;
 }
 
-export const MessageList = ({ messages, loading, error }: MessageListProps) => {
+const MessageListComponent = ({ messages, loading, error }: MessageListProps) => {
+  // Ensure messages is always an array
+  const safeMessages = messages || [];
   const { user } = useAuth();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Improved scroll logic
   useEffect(() => {
-    if (messages.length > 0 && containerRef.current) {
+    if (safeMessages.length > 0 && containerRef.current) {
       // More reliable scroll to bottom
       setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
       }, 100);
     }
-  }, [messages]);
+  }, [safeMessages]);
 
-  // Sort messages by date (oldest to newest)
-  const sortedMessages = [...messages].sort(
-    (a, b) =>
-      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  // Sort messages by date (oldest to newest) - memoized
+  const sortedMessages = useMemo(() =>
+    [...safeMessages].sort(
+      (a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    ),
+    [safeMessages]
   );
 
-  const groupedMessages = sortedMessages.reduce((groups, message) => {
-    const date = new Date(message.created_at).toLocaleDateString();
-    if (!groups[date]) groups[date] = [];
-    groups[date].push(message);
-    return groups;
-  }, {} as Record<string, Message[]>);
+  // Group messages by date - memoized
+  const groupedMessages = useMemo(() =>
+    sortedMessages.reduce((groups, message) => {
+      const date = new Date(message.created_at).toLocaleDateString();
+      if (!groups[date]) groups[date] = [];
+      groups[date].push(message);
+      return groups;
+    }, {} as Record<string, Message[]>),
+    [sortedMessages]
+  );
 
   if (loading) {
     return (
@@ -69,10 +78,10 @@ export const MessageList = ({ messages, loading, error }: MessageListProps) => {
     <div
       ref={containerRef}
       className={`h-full w-full px-4 py-4 bg-opacity-60 bg-[url('/chat-bg-pattern.png')] bg-repeat ${
-        messages.length > 0 ? "overflow-y-auto" : "overflow-hidden"
+        safeMessages.length > 0 ? "overflow-y-auto" : "overflow-hidden"
       }`}
     >
-      {messages.length === 0 ? (
+      {safeMessages.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-full text-center text-gray-500 py-10">
           <div className="bg-white rounded-full p-4 shadow mb-4">
             <SendIcon className="h-8 w-8 text-green-500 opacity-50" />
@@ -117,3 +126,6 @@ export const MessageList = ({ messages, loading, error }: MessageListProps) => {
     </div>
   );
 };
+
+// MessageList'i memo ile sarmalayarak export et
+export const MessageList = memo(MessageListComponent);

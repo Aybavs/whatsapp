@@ -5,10 +5,15 @@ import {
   ErrorHandler,
   CloseHandler,
   StatusUpdateHandler,
+  TypingHandler,
   StatusUpdateEvent,
+  MessageStatusUpdateEvent,
+  MessageStatusUpdateHandler,
+  BatchStatusUpdateEvent,
+  BatchStatusUpdateHandler,
   WebSocketStatus,
 } from "./types";
-import { Message } from "@/types";
+import { Message, TypingEvent } from "@/types";
 
 export class EventHandlerRegistry {
   private handlers: EventHandlers = {
@@ -17,6 +22,9 @@ export class EventHandlerRegistry {
     error: [],
     close: [],
     statusUpdate: [],
+    typing: [],
+    messageStatusUpdate: [],
+    batchStatusUpdate: [],
   };
 
   public onMessage(handler: MessageHandler): () => void {
@@ -58,6 +66,35 @@ export class EventHandlerRegistry {
     };
   }
 
+  public onTyping(handler: TypingHandler): () => void {
+    this.handlers.typing.push(handler);
+    return () => {
+      this.handlers.typing = this.handlers.typing.filter((h) => h !== handler);
+    };
+  }
+
+  public onMessageStatusUpdate(handler: MessageStatusUpdateHandler): () => void {
+    this.handlers.messageStatusUpdate.push(handler);
+    return () => {
+      this.handlers.messageStatusUpdate = this.handlers.messageStatusUpdate.filter(
+        (h) => h !== handler
+      );
+    };
+  }
+
+  public onBatchStatusUpdate(handler: BatchStatusUpdateHandler): () => void {
+    this.handlers.batchStatusUpdate.push(handler);
+    return () => {
+      this.handlers.batchStatusUpdate = this.handlers.batchStatusUpdate.filter(
+        (h) => h !== handler
+      );
+    };
+  }
+
+  public triggerTyping(event: TypingEvent): void {
+    this.handlers.typing.forEach((handler) => handler(event));
+  }
+
   public triggerStatus(status: WebSocketStatus): void {
     this.handlers.status.forEach((handler) => {
       try {
@@ -74,6 +111,14 @@ export class EventHandlerRegistry {
 
   public triggerStatusUpdate(event: StatusUpdateEvent): void {
     this.handlers.statusUpdate.forEach((handler) => handler(event));
+  }
+
+  public triggerMessageStatus(event: MessageStatusUpdateEvent): void {
+    this.handlers.messageStatusUpdate.forEach((handler) => handler(event));
+  }
+
+  public triggerBatchStatus(event: BatchStatusUpdateEvent): void {
+    this.handlers.batchStatusUpdate.forEach((handler) => handler(event));
   }
 
   public triggerError(error: Event): void {

@@ -38,13 +38,15 @@ type UserLogin struct {
 
 // UserResponse represents the user response
 type UserResponse struct {
-	ID        string `json:"id"`
-	Username  string `json:"username"`
-	Email     string `json:"email"`
-	FullName  string `json:"full_name"`
-	AvatarURL string `json:"avatar_url"`
-	CreatedAt string `json:"created_at"`
-	Status    string `json:"status"`
+	ID              string `json:"id"`
+	Username        string `json:"username"`
+	Email           string `json:"email"`
+	FullName        string `json:"full_name"`
+	AvatarURL       string `json:"avatar_url"`
+	CreatedAt       string `json:"created_at"`
+	Status          string `json:"status"`
+	LastMessage     string `json:"last_message,omitempty"`
+	LastMessageTime string `json:"last_message_time,omitempty"`
 }
 
 // LoginResponse represents the login response

@@ -91,3 +91,4 @@ docs/swagger.yaml
 *.pem
 *.crt
 *.key
+.claude/settings.local.json

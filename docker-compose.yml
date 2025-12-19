@@ -50,6 +50,7 @@ services:
       - MESSAGE_SERVICE_URL=http://message-service:8082
       - JWT_SECRET=your-secret-key-here
       - JWT_EXPIRATION_HOURS=24
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
 
   user-service:
     build:

@@ -78,6 +78,7 @@ func main() {
 
     authHandler := handlers.NewAuthHandler(userServiceURL)
     userHandler := handlers.NewUserHandler(userServiceURL)
+    groupHandler := handlers.NewGroupHandler(userServiceURL)
     messageHandler := handlers.NewMessageHandler(messageServiceURL)
     // Pass the RabbitMQ client to the WebSocket handler
     wsHandler := handlers.NewWebSocketHandler(messageServiceURL, mqClient, authService)
@@ -96,9 +97,14 @@ func main() {
         api.GET("/users/:id", middleware.AuthRequired(), userHandler.GetUserByID)
         api.PUT("/users/:id", middleware.AuthRequired(), userHandler.UpdateProfile)
         api.PATCH("/users/:id/status", middleware.AuthRequired(), userHandler.UpdateStatus)
+
+        // Group endpoints
+        api.POST("/groups", middleware.AuthRequired(), groupHandler.CreateGroup)
+        api.GET("/groups", middleware.AuthRequired(), groupHandler.GetUserGroups)
         
         // Message endpoints
         api.POST("/messages", middleware.AuthRequired(), messageHandler.SendMessage)
+        api.GET("/messages/search", middleware.AuthRequired(), messageHandler.SearchMessages)
         api.GET("/messages/:UserID", middleware.AuthRequired(), messageHandler.GetMessages)
         api.PATCH("/messages/:id/status", middleware.AuthRequired(), messageHandler.UpdateMessageStatus)
         

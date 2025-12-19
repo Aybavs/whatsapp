@@ -12,11 +12,16 @@ import (
 	"whatsapp/pkg/auth"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func main() {
+    if err := godotenv.Load(); err != nil {
+        log.Println("Note: .env file not found, using environment variables")
+    }
+
     mongoURI := os.Getenv("MONGODB_URI")
     if (mongoURI == "") {
         mongoURI = "mongodb://localhost:27017"
@@ -58,6 +63,7 @@ func main() {
     
     db := client.Database(mongoDB)
     userHandler := handlers.NewUserHandler(db, authService)
+    groupHandler := handlers.NewGroupHandler(db)
     
     // Public endpoints (no auth required)
     router.POST("/users/register", userHandler.Register)
@@ -74,6 +80,10 @@ func main() {
         authRoutes.GET("/users/:id", userHandler.GetProfile)     
         authRoutes.PUT("/users/:id", userHandler.UpdateProfile)
         authRoutes.PATCH("/users/:id/status", userHandler.UpdateStatus)
+
+        // Group routes
+        authRoutes.POST("/groups", groupHandler.CreateGroup)
+        authRoutes.GET("/groups", groupHandler.GetUserGroups)
     }
 
     port := os.Getenv("PORT")

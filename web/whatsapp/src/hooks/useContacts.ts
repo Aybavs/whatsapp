@@ -82,6 +82,24 @@ export const useContacts = () => {
     }
   }, [user, fetchContacts]);
 
+  // Update last message for a contact locally (for real-time updates)
+  const updateContactLastMessage = useCallback((contactId: string, message: string, time: string) => {
+    setContacts(prev => {
+        const updated = prev.map(c => 
+            c.id === contactId 
+                ? { ...c, last_message: message, last_message_time: time } 
+                : c
+        );
+        
+        // Sort by last message time descending
+        return updated.sort((a, b) => {
+            const timeA = a.last_message_time || a.created_at || '';
+            const timeB = b.last_message_time || b.created_at || '';
+            return new Date(timeB).getTime() - new Date(timeA).getTime();
+        });
+    });
+  }, []);
+
   return {
     // Existing contacts the user has
     contacts,
@@ -93,5 +111,6 @@ export const useContacts = () => {
     fetchContacts,
     searchUsers,
     addContact,
+    updateContactLastMessage
   };
 };

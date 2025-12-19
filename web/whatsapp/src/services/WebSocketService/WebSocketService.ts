@@ -90,10 +90,7 @@ export class WebSocketService {
 
   private createUrl(token: string): string {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host =
-      process.env.NODE_ENV === "development"
-        ? "localhost:8080"
-        : window.location.host;
+    const host = window.location.host; // Always use current host (e.g. localhost:3000)
     return `${protocol}//${host}/api/ws?token=${token}`;
   }
 
@@ -125,12 +122,39 @@ export class WebSocketService {
     }
   }
 
+  public sendTypingEvent(receiverId: string, isTyping: boolean): boolean {
+    const socket = this.connection.getSocket();
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    const typingEvent = {
+      type: "typing",
+      receiver_id: receiverId,
+      is_typing: isTyping,
+    };
+
+    try {
+      socket.send(JSON.stringify(typingEvent));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // Handler registration methods
   public onMessage = this.handlers.onMessage.bind(this.handlers);
   public onStatus = this.handlers.onStatus.bind(this.handlers);
   public onError = this.handlers.onError.bind(this.handlers);
   public onClose = this.handlers.onClose.bind(this.handlers);
   public onStatusUpdate = this.handlers.onStatusUpdate.bind(this.handlers);
+  public onMessageStatusUpdate = this.handlers.onMessageStatusUpdate.bind(
+    this.handlers
+  );
+  public onBatchStatusUpdate = this.handlers.onBatchStatusUpdate.bind(
+    this.handlers
+  );
+  public onTyping = this.handlers.onTyping.bind(this.handlers);
   public removeStatusHandler = this.handlers.removeStatusHandler.bind(
     this.handlers
   );

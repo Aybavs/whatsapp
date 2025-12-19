@@ -14,9 +14,14 @@ import (
 	"whatsapp/pkg/rabbitmq"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+    if err := godotenv.Load(); err != nil {
+        log.Println("Note: .env file not found, using environment variables")
+    }
+
     mongoURI := getEnv("MONGODB_URI", "mongodb://admin:password@mongodb:27017")
     rabbitMQURI := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
     jwtSecret := getEnv("JWT_SECRET", "your-secret-key-here")
@@ -34,27 +39,7 @@ func main() {
     defer mqClient.Close()
     
     authService := auth.NewService(jwtSecret, 24*time.Hour)
-    
-    // Delete existing queues and exchanges to avoid conflicts
-    queues := []string{"messages", "message_status", "dead_letters"}
-    exchanges := []string{"messages", "dead-letters"}
-    
-    for _, queue := range queues {
-        if err := mqClient.DeleteQueue(queue); err != nil {
-            log.Printf("Warning: Failed to delete queue %s: %v", queue, err)
-        }
-    }
-    
-    for _, exchange := range exchanges {
-        if err := mqClient.DeleteExchange(exchange); err != nil {
-            log.Printf("Warning: Failed to delete exchange %s: %v", exchange, err)
-        }
-    }
-    
-    // Add a small delay to ensure deletion completes
-    time.Sleep(500 * time.Millisecond)
-    
-    // Declare exchanges for messages
+
     if err = mqClient.DeclareExchange("messages", "topic"); err != nil {
         log.Fatalf("Failed to declare exchange: %v", err)
     }
@@ -94,8 +79,10 @@ func main() {
     }
     
     messageCollection := dbClient.GetCollection("whatsapp", "messages")
+    groupsCollection := dbClient.GetCollection("whatsapp", "groups")
+    usersCollection := dbClient.GetCollection("whatsapp", "users")
     
-    messageHandler := handlers.NewMessageHandler(messageCollection, mqClient)
+    messageHandler := handlers.NewMessageHandler(messageCollection, groupsCollection, usersCollection, mqClient)
     
     if err = mqClient.Consume(messageQueue.Name, messageHandler.HandleIncomingMessage); err != nil {
         log.Fatalf("Failed to start consuming messages: %v", err)
@@ -106,6 +93,7 @@ func main() {
     router.Use(middleware.AuthMiddleware(authService))
     
     router.POST("/messages", messageHandler.SendMessage)
+    router.GET("/messages/search", messageHandler.SearchMessages)
     router.GET("/messages/:UserID", messageHandler.GetMessages) 
     router.PATCH("/messages/:id/status", messageHandler.UpdateMessageStatus)
     

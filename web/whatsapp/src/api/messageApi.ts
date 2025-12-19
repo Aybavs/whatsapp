@@ -2,20 +2,49 @@ import axiosInstance from '@/api/axios';
 import { Message } from '@/types';
 
 export const messageApi = {
-  getMessages: async (UserID: string): Promise<Message[]> => {
-    const response = await axiosInstance.get<Message[]>(`/messages/${UserID}`);
+  getMessages: async (targetId: string, isGroup: boolean = false): Promise<Message[]> => {
+    const url = `/messages/${targetId}`;
+    const response = await axiosInstance.get<Message[]>(url);
     return response.data;
   },
 
   sendMessage: async (
-    receiverId: string,
+    targetId: string,
     content: string,
-    mediaUrl?: string
+    mediaUrl?: string,
+    isGroup: boolean = false
   ): Promise<Message> => {
-    const response = await axiosInstance.post<Message>("/messages", {
-      receiver_id: receiverId,
+    const payload:any = {
       content,
       media_url: mediaUrl,
+    };
+
+    if (isGroup) {
+      payload.group_id = targetId;
+    } else {
+      payload.receiver_id = targetId;
+    }
+
+    const response = await axiosInstance.post<Message>("/messages", payload);
+    return response.data;
+  },
+
+  searchMessages: async (query: string, contactId?: string): Promise<Message[]> => {
+    const params = new URLSearchParams({ q: query });
+    if (contactId) params.append('contact_id', contactId);
+    
+    const response = await axiosInstance.get<Message[]>(`/messages/search?${params.toString()}`);
+    return response.data;
+  },
+
+  uploadMedia: async (file: File): Promise<{ url: string; filename: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const response = await axiosInstance.post<{ url: string; filename: string }>('/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
     });
     return response.data;
   },

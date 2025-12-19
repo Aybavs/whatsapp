@@ -4,14 +4,16 @@ import { messageApi } from '@/api/messageApi';
 import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import WebSocketService from '@/services/WebSocketService';
-import { Message, User } from '@/types';
+import { Contact, Group, Message } from '@/types';
 
-export const useChat = (selectedContact: User | null) => {
+export const useChat = (selectedContact: Contact | null) => {
   const { user } = useAuth();
-  const { status: wsStatus, sendMessage: wsSendMessage } = useWebSocket();
+  useWebSocket();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isGroup = selectedContact && (selectedContact as Group).is_group;
 
   // Fetch message history when contact changes
   useEffect(() => {
@@ -22,9 +24,10 @@ export const useChat = (selectedContact: User | null) => {
       setError(null);
       try {
         const fetchedMessages = await messageApi.getMessages(
-          selectedContact.id
+          selectedContact.id,
+          !!isGroup
         );
-        setMessages(fetchedMessages);
+        setMessages(fetchedMessages || []);
       } catch (err) {
         console.error("Failed to fetch messages:", err);
         setError("Failed to load message history");
@@ -38,74 +41,84 @@ export const useChat = (selectedContact: User | null) => {
     } else {
       setMessages([]);
     }
-  }, [selectedContact, user]);
+  }, [selectedContact, user, isGroup]);
 
   // Function to send a message
   const sendMessage = useCallback(
     async (content: string, mediaUrl?: string) => {
-      if (!selectedContact || !user || !content.trim()) return false;
+      if (!selectedContact || !user || (!content.trim() && !mediaUrl)) return false;
 
-      if (wsStatus === "connected") {
-        const sent = wsSendMessage(selectedContact.id, content, mediaUrl);
-        if (sent) {
-          const optimisticMessage: Message = {
-            id: `optimistic-${Date.now()}`,
-            sender_id: user.id,
-            receiver_id: selectedContact.id,
-            content,
-            media_url: mediaUrl,
-            created_at: new Date().toISOString(),
-            status: "sent",
-          };
-          setMessages((prev) => [...prev, optimisticMessage]);
+      const optimisticMessage: Message = {
+        id: `optimistic-${Date.now()}`,
+        sender_id: user.id,
+        receiver_id: !isGroup ? selectedContact.id : '',
+        content,
+        media_url: mediaUrl,
+        created_at: new Date().toISOString(),
+        status: "sent",
+      };
 
-          // API'ye arka planda mesajı kaydet
-          messageApi
-            .sendMessage(selectedContact.id, content, mediaUrl)
-            .catch((err) => {
-              console.error("Failed to persist message via API:", err);
-              setError("Message not saved");
-            });
-
-          return true;
-        }
+      if (isGroup) {
+          (optimisticMessage as any).group_id = selectedContact.id;
       }
 
-      // WebSocket başarısızsa fallback olarak HTTP kullan
+      setMessages((prev) => [...prev, optimisticMessage]);
+
       try {
         const newMessage = await messageApi.sendMessage(
           selectedContact.id,
           content,
-          mediaUrl
+          mediaUrl,
+          !!isGroup
         );
-        setMessages((prev) => [...prev, newMessage]);
+        
+        // Replace optimistic message with real one
+        setMessages((prev) => 
+            prev.map(m => m.id === optimisticMessage.id ? newMessage : m)
+        );
         return true;
       } catch (err) {
         console.error("Failed to send message via API:", err);
         setError("Failed to send message");
+        // Remove optimistic message on failure
+         setMessages((prev) => prev.filter(m => m.id !== optimisticMessage.id));
         return false;
       }
     },
-    [selectedContact, user, wsStatus, wsSendMessage]
+    [selectedContact, user, isGroup]
   );
 
   // Handle incoming WebSocket messages
   useEffect(() => {
-    const handleWebSocketMessage = (message: Message) => {
-      // Only add messages from/to the selected contact
-      if (
-        selectedContact &&
-        (message.sender_id === selectedContact.id ||
-          message.receiver_id === selectedContact.id)
-      ) {
-        // Don't add duplicate messages
+    const handleWebSocketMessage = (message: Message & { group_id?: string }) => {
+      if (!selectedContact) return;
+
+      let shouldAdd = false;
+
+      if (isGroup) {
+        // Check if message belongs to this group
+        if (message.group_id === selectedContact.id) {
+          shouldAdd = true;
+        }
+      } else {
+        // Direct message check
+        if (
+            (!message.group_id || message.group_id === "000000000000000000000000") && 
+            (message.sender_id === selectedContact.id ||
+             message.receiver_id === selectedContact.id)
+        ) {
+          shouldAdd = true;
+        }
+      }
+
+      if (shouldAdd) {
         setMessages((prev) => {
-          if (prev.some((m) => m.id === message.id)) return prev;
-          return [...prev, message];
+          const currentMessages = prev || [];
+          if (currentMessages.some((m) => m.id === message.id)) return currentMessages;
+          return [...currentMessages, message];
         });
 
-        // If message is from the selected contact, mark as read
-        if (message.sender_id === selectedContact.id) {
+        if (!isGroup && message.sender_id === selectedContact.id && !message.id.startsWith("optimistic-") && !message.id.startsWith("temp-")) {
           messageApi
             .updateMessageStatus(message.id, "read")
             .catch((err) =>
@@ -115,9 +128,36 @@ export const useChat = (selectedContact: User | null) => {
       }
     };
 
-    const unsubscribe = WebSocketService.onMessage(handleWebSocketMessage);
-    return unsubscribe;
-  }, [selectedContact]);
+    const handleMessageStatusUpdate = (event: { message_id: string; status: string }) => {
+        setMessages((prev) => 
+            prev.map((msg) => 
+                msg.id === event.message_id ? { ...msg, status: event.status as Message['status'] } : msg
+            )
+        );
+    };
+
+    const handleBatchStatusUpdate = (event: { sender_id: string; receiver_id: string; status: string }) => {
+        if (selectedContact?.id === event.receiver_id) {
+           setMessages((prev) =>
+               prev.map((msg) =>
+                   (msg.receiver_id === event.receiver_id && msg.status !== 'read')
+                   ? { ...msg, status: event.status as Message['status'] }
+                   : msg
+               )
+           );
+        }
+    };
+
+    const unsubscribeMessage = WebSocketService.onMessage(handleWebSocketMessage);
+    const unsubscribeStatus = WebSocketService.onMessageStatusUpdate(handleMessageStatusUpdate);
+    const unsubscribeBatch = WebSocketService.onBatchStatusUpdate(handleBatchStatusUpdate);
+    
+    return () => {
+        unsubscribeMessage();
+        unsubscribeStatus();
+        unsubscribeBatch();
+    };
+  }, [selectedContact, isGroup]);
 
   return {
     messages,

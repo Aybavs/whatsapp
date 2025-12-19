@@ -19,7 +19,8 @@ const (
 type Message struct {
 	ID         primitive.ObjectID `bson:"_id" json:"id"`
 	SenderID   primitive.ObjectID `bson:"sender_id" json:"sender_id"`
-	ReceiverID primitive.ObjectID `bson:"receiver_id" json:"receiver_id"`
+	ReceiverID primitive.ObjectID `bson:"receiver_id,omitempty" json:"receiver_id,omitempty"` 
+	GroupID    primitive.ObjectID `bson:"group_id,omitempty" json:"group_id,omitempty"`       
 	Content    string             `bson:"content" json:"content"`
 	MediaURL   string             `bson:"media_url,omitempty" json:"media_url,omitempty"`
 	CreatedAt  time.Time          `bson:"created_at" json:"created_at"`
@@ -29,20 +30,23 @@ type Message struct {
 
 // MessageRequest represents a request to send a message
 type MessageRequest struct {
-	ReceiverID string `json:"receiver_id" example:"5f8d0f1b9d9d9d9d9d9d9d9d" binding:"required"`
+	ReceiverID string `json:"receiver_id,omitempty" example:"5f8d0f1b9d9d9d9d9d9d9d9d"` // Optional if GroupID is set
+	GroupID    string `json:"group_id,omitempty" example:"5f8d0f1b9d9d9d9d9d9d9d9a"`    // Optional if ReceiverID is set
 	Content    string `json:"content" example:"Hello, how are you?" binding:"required"`
 	MediaURL   string `json:"media_url,omitempty" example:"https://example.com/image.jpg"`
 }
 
 // MessageResponse represents a message in API responses
 type MessageResponse struct {
-	ID         string `json:"id" example:"5f8d0f1b9d9d9d9d9d9d9d9f"`
-	SenderID   string `json:"sender_id" example:"5f8d0f1b9d9d9d9d9d9d9d9d"`
-	ReceiverID string `json:"receiver_id" example:"5f8d0f1b9d9d9d9d9d9d9d9e"`
-	Content    string `json:"content" example:"Hello, how are you?"`
-	MediaURL   string `json:"media_url,omitempty" example:"https://example.com/image.jpg"`
-	CreatedAt  string `json:"created_at" example:"2023-08-01T15:04:05Z"`
-	Status     string `json:"status" example:"delivered"`
+	ID             string `json:"id" example:"5f8d0f1b9d9d9d9d9d9d9d9f"`
+	SenderID       string `json:"sender_id" example:"5f8d0f1b9d9d9d9d9d9d9d9d"`
+    SenderUsername string `json:"sender_username,omitempty" example:"johndoe"`
+	ReceiverID     string `json:"receiver_id,omitempty" example:"5f8d0f1b9d9d9d9d9d9d9d9e"`
+	GroupID        string `json:"group_id,omitempty" example:"5f8d0f1b9d9d9d9d9d9d9d9a"`
+	Content        string `json:"content" example:"Hello, how are you?"`
+	MediaURL       string `json:"media_url,omitempty" example:"https://example.com/image.jpg"`
+	CreatedAt      string `json:"created_at" example:"2023-08-01T15:04:05Z"`
+	Status         string `json:"status" example:"delivered"`
 }
 
 // MessageStatusUpdate represents a request to update message status
@@ -58,7 +62,18 @@ type MessageStatusResponse struct {
 
 // MessageStatusNotification represents a notification about message status change
 type MessageStatusNotification struct {
-	MessageID string        `json:"message_id" example:"5f8d0f1b9d9d9d9d9d9d9d9f"`
-	Status    MessageStatus `json:"status" example:"read"`
-	UpdatedAt string        `json:"updated_at" example:"2023-08-01T15:04:05Z"`
+	MessageID  string        `json:"message_id" example:"5f8d0f1b9d9d9d9d9d9d9d9f"`
+	Status     MessageStatus `json:"status" example:"read"`
+	UpdatedAt  string        `json:"updated_at" example:"2023-08-01T15:04:05Z"`
+	SenderID   string        `json:"sender_id,omitempty"`
+	ReceiverID string        `json:"receiver_id,omitempty"`
+}
+
+// TypingEvent represents a typing indicator event
+type TypingEvent struct {
+	Type       string `json:"type" example:"typing"`
+	SenderID   string `json:"sender_id" example:"5f8d0f1b9d9d9d9d9d9d9d9d"`
+	ReceiverID string `json:"receiver_id" example:"5f8d0f1b9d9d9d9d9d9d9d9e"`
+	IsTyping   bool   `json:"is_typing" example:"true"`
+	Timestamp  string `json:"timestamp" example:"2023-08-01T15:04:05Z"`
 }
